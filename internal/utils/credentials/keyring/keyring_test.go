@@ -56,6 +56,7 @@ like osx`
 
 // TestGetMultiline tests getting a multi-line password from the keyring
 func TestGetUmlaut(t *testing.T) {
+	//nolint:all
 	umlautPassword := "at least on OSX üöäÜÖÄß will be encoded"
 	err := Set(service, user, umlautPassword)
 	if err != nil {
