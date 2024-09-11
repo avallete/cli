@@ -10,4 +10,4 @@ Note that since Postgres roles are cluster level entities, those changes will pe
 
 ### Options
 
-- `--skip-seed`: Skips seeding the database with test data.
+- `--seed-path`: Path to the seeds file. If empty, skips seeding. If not provided, uses default `supabase/seed.sql` path.

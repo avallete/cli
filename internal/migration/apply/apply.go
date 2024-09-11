@@ -41,7 +41,18 @@ func MigrateAndSeed(ctx context.Context, version string, conn *pgx.Conn, fsys af
 }
 
 func SeedDatabase(ctx context.Context, conn *pgx.Conn, fsys afero.Fs, seedPath string) error {
-	err := migration.SeedData(ctx, []string{seedPath}, conn, afero.NewIOFS(fsys))
+	// Resolve the pattern into a list of matching files if seedPath is a pattern
+	seedFiles, err := afero.Glob(fsys, seedPath)
+	if err != nil {
+		return err
+	}
+
+	// If no files match the pattern, return nil
+	if len(seedFiles) == 0 {
+		return nil
+	}
+
+	err = migration.SeedData(ctx, []string{seedPath}, conn, afero.NewIOFS(fsys))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
