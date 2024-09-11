@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/supabase/cli/internal/db/seed"
 	"github.com/supabase/cli/internal/testing/fstest"
 	"github.com/supabase/cli/internal/testing/helper"
 	"github.com/supabase/cli/internal/utils"
@@ -18,6 +19,7 @@ import (
 )
 
 func TestMigrateDatabase(t *testing.T) {
+	seedConfig := seed.NewConfig("", false)
 	t.Run("applies local migration", func(t *testing.T) {
 		// Setup in-memory fs
 		fsys := afero.NewMemMapFs()
@@ -33,12 +35,12 @@ func TestMigrateDatabase(t *testing.T) {
 			Query(migration.INSERT_MIGRATION_VERSION, "0", "test", []string{sql}).
 			Reply("INSERT 0 1")
 		// Run test
-		err := MigrateAndSeed(context.Background(), "", conn.MockClient(t), fsys, false)
+		err := MigrateAndSeed(context.Background(), "", conn.MockClient(t), fsys, seedConfig)
 		// Check error
 		assert.NoError(t, err)
 	})
 
-	t.Run("skip seeding when skip-seed flag is set", func(t *testing.T) {
+	t.Run("skip seeding when seed-path is provided with an empty string", func(t *testing.T) {
 		// Setup in-memory fs
 		fsys := afero.NewMemMapFs()
 		path := filepath.Join(utils.MigrationsDir, "0_test.sql")
@@ -56,20 +58,20 @@ func TestMigrateDatabase(t *testing.T) {
 			Query(migration.INSERT_MIGRATION_VERSION, "0", "test", []string{sql}).
 			Reply("INSERT 0 1")
 		// Run test
-		err := MigrateAndSeed(context.Background(), "", conn.MockClient(t), fsys, true)
+		err := MigrateAndSeed(context.Background(), "", conn.MockClient(t), fsys, seed.NewConfig("", true))
 		// No error should be returned since seeding is skipped
 		assert.NoError(t, err)
 	})
 
 	t.Run("ignores empty local directory", func(t *testing.T) {
-		assert.NoError(t, MigrateAndSeed(context.Background(), "", nil, afero.NewMemMapFs(), false))
+		assert.NoError(t, MigrateAndSeed(context.Background(), "", nil, afero.NewMemMapFs(), seedConfig))
 	})
 
 	t.Run("throws error on open failure", func(t *testing.T) {
 		// Setup in-memory fs
 		fsys := &fstest.OpenErrorFs{DenyPath: utils.MigrationsDir}
 		// Run test
-		err := MigrateAndSeed(context.Background(), "", nil, fsys, false)
+		err := MigrateAndSeed(context.Background(), "", nil, fsys, seedConfig)
 		// Check error
 		assert.ErrorIs(t, err, os.ErrPermission)
 	})
@@ -88,20 +90,20 @@ func TestSeedDatabase(t *testing.T) {
 		conn.Query(sql).
 			Reply("INSERT 0 1")
 		// Run test
-		err := SeedDatabase(context.Background(), conn.MockClient(t), fsys)
+		err := SeedDatabase(context.Background(), conn.MockClient(t), fsys, utils.SeedDataPath)
 		// Check error
 		assert.NoError(t, err)
 	})
 
 	t.Run("ignores missing seed", func(t *testing.T) {
-		assert.NoError(t, SeedDatabase(context.Background(), nil, afero.NewMemMapFs()))
+		assert.NoError(t, SeedDatabase(context.Background(), nil, afero.NewMemMapFs(), utils.SeedDataPath))
 	})
 
 	t.Run("throws error on read failure", func(t *testing.T) {
 		// Setup in-memory fs
 		fsys := &fstest.OpenErrorFs{DenyPath: utils.SeedDataPath}
 		// Run test
-		err := SeedDatabase(context.Background(), nil, fsys)
+		err := SeedDatabase(context.Background(), nil, fsys, utils.SeedDataPath)
 		// Check error
 		assert.ErrorIs(t, err, os.ErrPermission)
 	})
@@ -118,7 +120,7 @@ func TestSeedDatabase(t *testing.T) {
 		conn.Query(sql).
 			ReplyError(pgerrcode.NotNullViolation, `null value in column "age" of relation "employees"`)
 		// Run test
-		err := SeedDatabase(context.Background(), conn.MockClient(t), fsys)
+		err := SeedDatabase(context.Background(), conn.MockClient(t), fsys, utils.SeedDataPath)
 		// Check error
 		assert.ErrorContains(t, err, `ERROR: null value in column "age" of relation "employees" (SQLSTATE 23502)`)
 	})

@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
 	"github.com/spf13/afero"
+	"github.com/supabase/cli/internal/db/seed"
 	"github.com/supabase/cli/internal/migration/apply"
 	"github.com/supabase/cli/internal/status"
 	"github.com/supabase/cli/internal/utils"
@@ -311,7 +312,7 @@ func setupDatabase(ctx context.Context, fsys afero.Fs, w io.Writer, options ...f
 	if err := SetupDatabase(ctx, conn, utils.DbId, w, fsys); err != nil {
 		return err
 	}
-	return apply.MigrateAndSeed(ctx, "", conn, fsys, false)
+	return apply.MigrateAndSeed(ctx, "", conn, fsys, seed.NewConfig("", false))
 }
 
 func SetupDatabase(ctx context.Context, conn *pgx.Conn, host string, w io.Writer, fsys afero.Fs) error {

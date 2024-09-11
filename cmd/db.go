@@ -20,6 +20,7 @@ import (
 	"github.com/supabase/cli/internal/db/remote/changes"
 	"github.com/supabase/cli/internal/db/remote/commit"
 	"github.com/supabase/cli/internal/db/reset"
+	"github.com/supabase/cli/internal/db/seed"
 	"github.com/supabase/cli/internal/db/start"
 	"github.com/supabase/cli/internal/db/test"
 	"github.com/supabase/cli/internal/utils"
@@ -187,8 +188,9 @@ var (
 		Use:   "reset",
 		Short: "Resets the local database to current migrations",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			skipSeed, _ := cmd.Flags().GetBool("skip-seed")
-			return reset.Run(cmd.Context(), migrationVersion, flags.DbConfig, afero.NewOsFs(), skipSeed)
+			seedPath, _ := cmd.Flags().GetString("seed-path")
+			seedConfig := seed.NewConfig(seedPath, cmd.Flags().Changed("seed-path"))
+			return reset.Run(cmd.Context(), migrationVersion, flags.DbConfig, afero.NewOsFs(), seedConfig)
 		},
 	}
 
@@ -300,7 +302,7 @@ func init() {
 	resetFlags.String("db-url", "", "Resets the database specified by the connection string (must be percent-encoded).")
 	resetFlags.Bool("linked", false, "Resets the linked project with local migrations.")
 	resetFlags.Bool("local", true, "Resets the local database with local migrations.")
-	resetFlags.Bool("skip-seed", false, "Skip running the seed script after reset")
+	resetFlags.String("seed-path", "", "Path to the seed file or directory. If empty, skips seeding. If not provided, uses default path.")
 	dbResetCmd.MarkFlagsMutuallyExclusive("db-url", "linked", "local")
 	resetFlags.StringVar(&migrationVersion, "version", "", "Reset up to the specified version.")
 	dbCmd.AddCommand(dbResetCmd)

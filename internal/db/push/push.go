@@ -59,7 +59,7 @@ func Run(ctx context.Context, dryRun, ignoreVersionMismatch bool, includeRoles, 
 			return err
 		}
 		if includeSeed {
-			if err := apply.SeedDatabase(ctx, conn, fsys); err != nil {
+			if err := apply.SeedDatabase(ctx, conn, fsys, utils.SeedDataPath); err != nil {
 				return err
 			}
 		}

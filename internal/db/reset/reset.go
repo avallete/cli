@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v4"
 	"github.com/spf13/afero"
+	"github.com/supabase/cli/internal/db/seed"
 	"github.com/supabase/cli/internal/db/start"
 	"github.com/supabase/cli/internal/gen/keys"
 	"github.com/supabase/cli/internal/migration/apply"
@@ -27,7 +28,7 @@ import (
 	"github.com/supabase/cli/pkg/migration"
 )
 
-func Run(ctx context.Context, version string, config pgconn.Config, fsys afero.Fs, skipSeed bool, options ...func(*pgx.ConnConfig)) error {
+func Run(ctx context.Context, version string, config pgconn.Config, fsys afero.Fs, seedConfig seed.Config, options ...func(*pgx.ConnConfig)) error {
 	if len(version) > 0 {
 		if _, err := strconv.Atoi(version); err != nil {
 			return errors.New(repair.ErrInvalidVersion)
@@ -36,6 +37,10 @@ func Run(ctx context.Context, version string, config pgconn.Config, fsys afero.F
 			return err
 		}
 	}
+	if !seedConfig.IsProvided {
+		// If seedConfig is not provided, set it to the default value
+		seedConfig = seed.NewConfig(utils.SeedDataPath, true)
+	}
 	if !utils.IsLocalDatabase(config) {
 		msg := "Do you want to reset the remote database?"
 		if shouldReset, err := utils.NewConsole().PromptYesNo(ctx, msg, false); err != nil {
@@ -43,14 +48,14 @@ func Run(ctx context.Context, version string, config pgconn.Config, fsys afero.F
 		} else if !shouldReset {
 			return errors.New(context.Canceled)
 		}
-		return resetRemote(ctx, version, config, fsys, skipSeed, options...)
+		return resetRemote(ctx, version, config, fsys, seedConfig, options...)
 	}
 	// Config file is loaded before parsing --linked or --local flags
 	if err := utils.AssertSupabaseDbIsRunning(); err != nil {
 		return err
 	}
 	// Reset postgres database because extensions (pg_cron, pg_net) require postgres
-	if err := resetDatabase(ctx, version, fsys, skipSeed, options...); err != nil {
+	if err := resetDatabase(ctx, version, fsys, seedConfig, options...); err != nil {
 		return err
 	}
 	// Seed objects from supabase/buckets directory
@@ -67,12 +72,12 @@ func Run(ctx context.Context, version string, config pgconn.Config, fsys afero.F
 	return nil
 }
 
-func resetDatabase(ctx context.Context, version string, fsys afero.Fs, skipSeed bool, options ...func(*pgx.ConnConfig)) error {
+func resetDatabase(ctx context.Context, version string, fsys afero.Fs, seedConfig seed.Config, options ...func(*pgx.ConnConfig)) error {
 	fmt.Fprintln(os.Stderr, "Resetting local database"+toLogMessage(version))
 	if utils.Config.Db.MajorVersion <= 14 {
-		return resetDatabase14(ctx, version, fsys, skipSeed, options...)
+		return resetDatabase14(ctx, version, fsys, seedConfig, options...)
 	}
-	return resetDatabase15(ctx, version, fsys, skipSeed, options...)
+	return resetDatabase15(ctx, version, fsys, seedConfig, options...)
 }
 
 func toLogMessage(version string) string {
@@ -82,7 +87,7 @@ func toLogMessage(version string) string {
 	return "..."
 }
 
-func resetDatabase14(ctx context.Context, version string, fsys afero.Fs, skipSeed bool, options ...func(*pgx.ConnConfig)) error {
+func resetDatabase14(ctx context.Context, version string, fsys afero.Fs, seedConfig seed.Config, options ...func(*pgx.ConnConfig)) error {
 	if err := recreateDatabase(ctx, options...); err != nil {
 		return err
 	}
@@ -102,10 +107,10 @@ func resetDatabase14(ctx context.Context, version string, fsys afero.Fs, skipSee
 			return err
 		}
 	}
-	return apply.MigrateAndSeed(ctx, version, conn, fsys, skipSeed)
+	return apply.MigrateAndSeed(ctx, version, conn, fsys, seedConfig)
 }
 
-func resetDatabase15(ctx context.Context, version string, fsys afero.Fs, skipSeed bool, options ...func(*pgx.ConnConfig)) error {
+func resetDatabase15(ctx context.Context, version string, fsys afero.Fs, seedConfig seed.Config, options ...func(*pgx.ConnConfig)) error {
 	if err := utils.Docker.ContainerRemove(ctx, utils.DbId, container.RemoveOptions{Force: true}); err != nil {
 		return errors.Errorf("failed to remove container: %w", err)
 	}
@@ -140,7 +145,7 @@ func resetDatabase15(ctx context.Context, version string, fsys afero.Fs, skipSee
 	if err := start.SetupDatabase(ctx, conn, utils.DbId, os.Stderr, fsys); err != nil {
 		return err
 	}
-	if err := apply.MigrateAndSeed(ctx, version, conn, fsys, skipSeed); err != nil {
+	if err := apply.MigrateAndSeed(ctx, version, conn, fsys, seedConfig); err != nil {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "Restarting containers...")
@@ -222,7 +227,7 @@ func listServicesToRestart() []string {
 	return []string{utils.StorageId, utils.GotrueId, utils.RealtimeId, utils.PoolerId}
 }
 
-func resetRemote(ctx context.Context, version string, config pgconn.Config, fsys afero.Fs, skipSeed bool, options ...func(*pgx.ConnConfig)) error {
+func resetRemote(ctx context.Context, version string, config pgconn.Config, fsys afero.Fs, seedConfig seed.Config, options ...func(*pgx.ConnConfig)) error {
 	fmt.Fprintln(os.Stderr, "Resetting remote database"+toLogMessage(version))
 	conn, err := utils.ConnectByConfigStream(ctx, config, io.Discard, options...)
 	if err != nil {
@@ -232,7 +237,7 @@ func resetRemote(ctx context.Context, version string, config pgconn.Config, fsys
 	if err := migration.DropUserSchemas(ctx, conn); err != nil {
 		return err
 	}
-	return apply.MigrateAndSeed(ctx, version, conn, fsys, skipSeed)
+	return apply.MigrateAndSeed(ctx, version, conn, fsys, seedConfig)
 }
 
 func LikeEscapeSchema(schemas []string) (result []string) {
