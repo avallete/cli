@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { BunServices } from "@effect/platform-bun";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Effect, Exit, Layer, Option } from "effect";
+import { afterEach, beforeEach } from "vitest";
 import { stripAnsi } from "../../../../../../../tests/helpers/ansi.ts";
 
 import {
@@ -324,6 +325,18 @@ const failError = (exit: Exit.Exit<unknown, unknown>) =>
 
 describe("legacy db schema declarative generate integration", () => {
   const tmp = useLegacyTempWorkdir();
+  // `legacyResolveYesWithProjectEnv` reads `SUPABASE_YES` from the process env, so a
+  // shell leftover (or a prior test) would auto-confirm overwrite/smart-target
+  // prompts and make the non-interactive cases succeed when they should fail.
+  let previousYes: string | undefined;
+  beforeEach(() => {
+    previousYes = process.env["SUPABASE_YES"];
+    delete process.env["SUPABASE_YES"];
+  });
+  afterEach(() => {
+    if (previousYes === undefined) delete process.env["SUPABASE_YES"];
+    else process.env["SUPABASE_YES"] = previousYes;
+  });
 
   it.effect("gate: fails when neither --experimental nor config enables pg-delta", () => {
     const { layer } = setup(tmp.current, { experimental: false });
