@@ -385,8 +385,10 @@ handling there):
 - **Provide a Secret Service for the cli-go keyring test.**
   `apps/cli-go/internal/utils/credentials/keyring_test.go` talks to a D-Bus
   Secret Service. Run Go tests inside an unlocked session, mirroring CI's
-  unlock-keyring step:
-  `dbus-run-session -- bash -c 'echo "" | gnome-keyring-daemon --unlock --components=secrets; go test ./...'`.
+  unlock-keyring step, and point the keyring at a fresh data dir so
+  `gnome-keyring-daemon` never trips over stale keyring files (a snapshot can
+  reset their mtime and abort the daemon):
+  `dbus-run-session -- bash -c 'export XDG_DATA_HOME=$(mktemp -d); echo | gnome-keyring-daemon --unlock --components=secrets; go test ./...'`.
 
 `supabase start` (the full local stack) needs Docker, which is not part of this
 base environment; the core dev loop (build, run the CLI, unit/integration
