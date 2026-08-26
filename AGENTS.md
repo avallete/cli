@@ -364,3 +364,32 @@ const { stdout, stderr, exitCode } = await runSupabase(["login", "--token", toke
 expect(exitCode).toBe(0);
 expect(stdout).toContain("Logged in successfully");
 ```
+
+## Cursor Cloud specific instructions
+
+The Cloud Agent environment is provisioned by `.cursor/environment.json` →
+`.cursor/install.sh`, which installs the mise-pinned toolchains (bun, node,
+pnpm, go, golangci-lint), the `.repos/*` submodules, the workspace
+dependencies, and the `gnome-keyring`/`dbus` packages the cli-go keyring test
+needs. The toolchains are on `PATH` via mise activation in `~/.bashrc`.
+
+Two test-invocation details are specific to the headless Cloud Agent VM (a real
+developer terminal and CI already satisfy both, so they need no special
+handling there):
+
+- **Force color for the in-process suites.** `apps/cli`'s output-layer tests
+  assert ANSI color that `styleText` emits only for a color-capable stream. The
+  VM runs commands with a non-TTY stdio and `NO_COLOR=1`, which strips color and
+  makes those assertions fail. Run the TS suites with `FORCE_COLOR=1` and
+  `NO_COLOR` unset, e.g. `env -u NO_COLOR FORCE_COLOR=1 pnpm test:core`.
+- **Provide a Secret Service for the cli-go keyring test.**
+  `apps/cli-go/internal/utils/credentials/keyring_test.go` talks to a D-Bus
+  Secret Service. Run Go tests inside an unlocked session, mirroring CI's
+  unlock-keyring step, and point the keyring at a fresh data dir so
+  `gnome-keyring-daemon` never trips over stale keyring files (a snapshot can
+  reset their mtime and abort the daemon):
+  `dbus-run-session -- bash -c 'export XDG_DATA_HOME=$(mktemp -d); echo | gnome-keyring-daemon --unlock --components=secrets; go test ./...'`.
+
+`supabase start` (the full local stack) needs Docker, which is not part of this
+base environment; the core dev loop (build, run the CLI, unit/integration
+tests) does not require it.

@@ -39,10 +39,10 @@
         "command": "oxlint --disable-nested-config --fix"
       },
       "fmt:check": {
-        "command": "oxfmt --check"
+        "command": "oxfmt --disable-nested-config --check"
       },
       "fmt:fix": {
-        "command": "oxfmt"
+        "command": "oxfmt --disable-nested-config"
       },
       "knip:check": {
         "command": "knip-bun"
