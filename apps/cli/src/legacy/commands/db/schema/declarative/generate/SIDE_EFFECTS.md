@@ -92,6 +92,11 @@ always go to stderr, in every `--output-format`. On success:
 - Requires `--experimental` or `[experimental.pgdelta] enabled = true`.
 - `--db-url` / `--linked` / `--local` are mutually exclusive; absent all three,
   smart mode prompts (existing-files overwrite → Local/Custom choice + reset offer).
+- `--schema` / `-s` restricts the export to those schemas (comma-separated, CSV-split).
+  Cluster-level objects with no schema identity (extensions, roles) still export
+  under `_cluster/`. Platform schemas (`auth`, `storage`, `realtime`) stay excluded
+  by the Supabase profile even when named here. The filter is a fact-level managed-view
+  rule so generate, pull `--declarative`, and sync share the same include set.
 - `--output-dir <dir>` selects a destination for this invocation without changing
   config or activating it for later syncs (TS-only; deliberately not
   `--output`/`-o`, which the legacy root reserves for the global machine-format
