@@ -18,7 +18,10 @@
  *      run-to-completion container on the SAME Docker network as `db` — Go's
  *      `DockerStart` defaults `NetworkMode` to `utils.NetId` when unset,
  *      `docker.go:379-383`), each gated on its own service's `enabled` flag and none
- *      of which touch `conn` directly:
+ *      of which touch `conn` directly. Slim images skip the Realtime and Storage
+ *      jobs: those images migrate (and Realtime seeds) from their long-running
+ *      entrypoint. Slim Auth still runs a one-shot `migrate` under the baked
+ *      `auth` ENTRYPOINT.
  *      - `initRealtimeJob` (`start.go:268-295`) — reuses
  *        `./realtime-env.ts`'s `legacyBuildRealtimeEnv`, which builds
  *        the byte-identical env-var literal Go's own `initRealtimeJob` embeds
@@ -160,6 +163,7 @@ import {
 } from "../legacy-vault.ts";
 import { legacyEnsureImagesCached, type LegacyImagePrepullError } from "./image-prepull.ts";
 import { legacyResolvePinnedImage } from "./pinned-image.ts";
+import { legacyUsesSlimRuntime } from "./slim-runtime.ts";
 import { LEGACY_COMPOSE_PROJECT_LABEL } from "./container-lifecycle.ts";
 import { LEGACY_REALTIME_TENANT_ID, legacyBuildRealtimeEnv } from "./realtime-env.ts";
 import { LEGACY_START_DB_GLOBALS_SQL } from "./templates/db-globals.sql.ts";
@@ -802,26 +806,33 @@ const legacyStartInitSchema15 = Effect.fnUntraced(function* (
   const dbPassword = legacyStartInternalDbPassword(input.dbUrl);
 
   if (input.config.realtime.enabled) {
-    yield* legacyRunStartMigrateJob(spawner, {
-      image: input.images.realtime,
-      networkId: input.networkId,
-      projectId: input.projectId,
-      projectEnvValues: input.projectEnvValues,
-      debug: input.debug,
-      env: legacyBuildRealtimeEnv({
-        ipVersion: input.config.realtime.ip_version,
-        maxHeaderLength: input.config.realtime.max_header_length,
-        dbHost,
-        dbPassword,
-        jwtSecret: input.jwtSecret,
-        jwks: input.jwks,
-      }),
-      cmd: [
-        "/app/bin/realtime",
-        "eval",
-        `{:ok, _} = Application.ensure_all_started(:realtime)\n{:ok, _} = Realtime.Tenants.health_check("${LEGACY_REALTIME_TENANT_ID}")`,
-      ],
-    });
+    // Slim realtime's ENTRYPOINT (`tini` + `/app/entry.sh`) already runs
+    // `/app/bin/migrate`, seeds when `SEED_SELF_HOST=true` (set by
+    // `legacyBuildRealtimeEnv`), then execs the server. The docker.io one-shot
+    // `eval` health_check would otherwise start a second BEAM against the
+    // same DB (and hang if it inherited `entry.sh`). Skip it.
+    if (!legacyUsesSlimRuntime(input.images.realtime)) {
+      yield* legacyRunStartMigrateJob(spawner, {
+        image: input.images.realtime,
+        networkId: input.networkId,
+        projectId: input.projectId,
+        projectEnvValues: input.projectEnvValues,
+        debug: input.debug,
+        env: legacyBuildRealtimeEnv({
+          ipVersion: input.config.realtime.ip_version,
+          maxHeaderLength: input.config.realtime.max_header_length,
+          dbHost,
+          dbPassword,
+          jwtSecret: input.jwtSecret,
+          jwks: input.jwks,
+        }),
+        cmd: [
+          "/app/bin/realtime",
+          "eval",
+          `{:ok, _} = Application.ensure_all_started(:realtime)\n{:ok, _} = Realtime.Tenants.health_check("${LEGACY_REALTIME_TENANT_ID}")`,
+        ],
+      });
+    }
   }
   if (input.config.storage.enabled) {
     // `legacyStartStorageMigrateEnv` parses `storage.file_size_limit` via
@@ -837,34 +848,43 @@ const legacyStartInitSchema15 = Effect.fnUntraced(function* (
     // fix already applied to `resolveDbHealthTimeoutSeconds` and the
     // long-running Storage container's own file-size-limit parsing
     // (`start.handler.ts`).
-    const storageEnv = yield* Effect.try({
-      try: () =>
-        legacyStartStorageMigrateEnv({
-          targetMigration: input.storageTargetMigration,
-          anonKey: input.anonKey,
-          serviceRoleKey: input.serviceRoleKey,
-          jwtSecret: input.jwtSecret,
-          dbHost,
-          dbPassword,
-          fileSizeLimit: input.config.storage.file_size_limit,
-        }),
-      catch: (cause) =>
-        new LegacyDbSetupError({
-          message: `invalid config for storage: ${errMessage(cause)}`,
-          reason: "invalid_config",
-        }),
-    });
-    yield* legacyRunStartMigrateJob(spawner, {
-      image: input.images.storage,
-      networkId: input.networkId,
-      projectId: input.projectId,
-      projectEnvValues: input.projectEnvValues,
-      debug: input.debug,
-      env: storageEnv,
-      cmd: ["node", "dist/scripts/migrate-call.js"],
-    });
+    // Slim storage has no `dist/scripts/migrate-call.js` (the docker.io one-shot
+    // cmd). Tenant migrations run when the long-running server boots, and the slim
+    // postgres image already applies the bundled storage schema at initdb.
+    if (!legacyUsesSlimRuntime(input.images.storage)) {
+      const storageEnv = yield* Effect.try({
+        try: () =>
+          legacyStartStorageMigrateEnv({
+            targetMigration: input.storageTargetMigration,
+            anonKey: input.anonKey,
+            serviceRoleKey: input.serviceRoleKey,
+            jwtSecret: input.jwtSecret,
+            dbHost,
+            dbPassword,
+            fileSizeLimit: input.config.storage.file_size_limit,
+          }),
+        catch: (cause) =>
+          new LegacyDbSetupError({
+            message: `invalid config for storage: ${errMessage(cause)}`,
+            reason: "invalid_config",
+          }),
+      });
+      yield* legacyRunStartMigrateJob(spawner, {
+        image: input.images.storage,
+        networkId: input.networkId,
+        projectId: input.projectId,
+        projectEnvValues: input.projectEnvValues,
+        debug: input.debug,
+        env: storageEnv,
+        cmd: ["node", "dist/scripts/migrate-call.js"],
+      });
+    }
   }
   if (input.config.auth.enabled) {
+    // Slim auth bakes `/usr/local/bin/auth` as ENTRYPOINT, so `["gotrue", "migrate"]`
+    // would become `auth gotrue migrate`. The docker.io image has an empty
+    // entrypoint and expects the binary name in argv.
+    const slimAuth = legacyUsesSlimRuntime(input.images.auth);
     yield* legacyRunStartMigrateJob(spawner, {
       image: input.images.auth,
       networkId: input.networkId,
@@ -879,7 +899,7 @@ const legacyStartInitSchema15 = Effect.fnUntraced(function* (
         dbHost,
         dbPassword,
       }),
-      cmd: ["gotrue", "migrate"],
+      cmd: slimAuth ? ["migrate"] : ["gotrue", "migrate"],
     });
   }
 });

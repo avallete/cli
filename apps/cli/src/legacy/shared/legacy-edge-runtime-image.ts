@@ -1,4 +1,5 @@
 import { Effect, type FileSystem, type Path } from "effect";
+import { DENO1_EDGE_RUNTIME_VERSION } from "../../shared/functions/functions.shared.ts";
 import { dockerfileServiceImage } from "../../shared/services/dockerfile-images.ts";
 
 /**
@@ -12,9 +13,14 @@ import { dockerfileServiceImage } from "../../shared/services/dockerfile-images.
  * image instead (default `deno_version = 2` keeps the Dockerfile image).
  */
 
-export const LEGACY_EDGE_RUNTIME_IMAGE = dockerfileServiceImage("edgeruntime");
-// `deno1` (`pkg/config/constants.go:15`) — used when `deno_version = 1`.
-const LEGACY_EDGE_RUNTIME_DENO1_IMAGE = "supabase/edge-runtime:v1.68.4";
+// Read per call, not captured at import time, so `SUPABASE_USE_SLIM_IMAGES` is
+// observed by the resolver (and by tests that stub the env).
+export const legacyEdgeRuntimeImage = () => dockerfileServiceImage("edgeruntime");
+// `deno1` (`pkg/config/constants.go:15`) — used when `deno_version = 1`. No slim
+// build exists for it, so it stays on docker.io regardless of the flag — the
+// same exception `edgeRuntimeImage` (`shared/functions/functions.shared.ts`)
+// applies for the functions Docker paths reading the SAME pin file.
+const LEGACY_EDGE_RUNTIME_DENO1_IMAGE = `supabase/edge-runtime:${DENO1_EDGE_RUNTIME_VERSION}`;
 
 /** `pkg/config/utils.go:81` — replace everything after the first `:` with `tag`. */
 function replaceImageTag(image: string, tag: string): string {
@@ -35,14 +41,20 @@ export const legacyResolveEdgeRuntimeImage = Effect.fnUntraced(function* (
   workdir: string,
   denoVersion: number,
 ) {
-  let image = LEGACY_EDGE_RUNTIME_IMAGE;
+  let image = legacyEdgeRuntimeImage();
   const versionPath = path.join(workdir, "supabase", ".temp", "edge-runtime-version");
   const pinned = yield* fs.readFileString(versionPath).pipe(
     Effect.map((s) => s.trim()),
     Effect.orElseSucceed(() => ""),
   );
   if (pinned.length > 0) {
-    image = replaceImageTag(LEGACY_EDGE_RUNTIME_IMAGE, pinned);
+    // A pin of the deno1 tag (e.g. left in .temp by an earlier deno_version = 1
+    // run) resolves docker.io whatever selected it: no slim build of that tag
+    // exists, so tag-swapping it onto a slim base would yield an unpullable ref.
+    image =
+      pinned === DENO1_EDGE_RUNTIME_VERSION
+        ? LEGACY_EDGE_RUNTIME_DENO1_IMAGE
+        : replaceImageTag(legacyEdgeRuntimeImage(), pinned);
   }
   if (denoVersion === 1) {
     image = LEGACY_EDGE_RUNTIME_DENO1_IMAGE;

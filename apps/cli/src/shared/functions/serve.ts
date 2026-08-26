@@ -76,6 +76,7 @@ import {
 } from "./functions-docker.ts";
 import { loadFunctionsCliConfig, type FunctionsGoConfigCompat } from "./functions-config.ts";
 import { edgeRuntimeImage, resolveEdgeRuntimeVersionPin } from "./functions.shared.ts";
+import { usesSlimImageRuntime } from "../services/slim-images.ts";
 const decodeCliConfig = Schema.decodeUnknownSync(CliConfigSchema);
 const defaultCliConfig = decodeCliConfig({});
 
@@ -108,7 +109,8 @@ const ignoredDirNames = new Set([
 const dockerLogRetryDelay = Duration.millis(400);
 const dockerLogDiagnosticTailLength = 4_096;
 const defaultSupabaseEnv = "development";
-const serveMainContainerPath = "/root/index.ts";
+const slimServeMainDir = "/tmp";
+const dockerIoServeMainDir = "/root";
 const shellVariableNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 let cachedLegacyFunctionsServeMainTemplate: string | undefined;
 const watchIgnoreGlobs = [
@@ -1758,21 +1760,31 @@ export const startEdgeRuntimeContainer = Effect.fn("functions.startEdgeRuntimeCo
       });
 
       const labels = dockerProjectLabels(projectId);
+      const slimEdgeRuntime = usesSlimImageRuntime(input.image);
+      const serveMainDir = slimEdgeRuntime ? slimServeMainDir : dockerIoServeMainDir;
+      const serveMainFile = `${serveMainDir}/index.ts`;
       const runtimeCommand = [
         "edge-runtime",
         "start",
-        "--main-service=/root",
+        `--main-service=${serveMainDir}`,
         `--port=${dockerRuntimeServerPort}`,
         `--policy=${input.config.edgeRuntimePolicy}`,
         ...buildFunctionsServeInspectArgs(input.inspectMode, input.inspectMain),
         ...(input.debug ? ["--verbose"] : []),
       ];
+      if (slimEdgeRuntime && dockerMultilineEnvScript !== undefined) {
+        return yield* Effect.fail(
+          new Error(
+            "SUPABASE_USE_SLIM_IMAGES cannot source multiline function secrets: the slim edge-runtime image has no shell. Unset the flag, or remove newline-containing values from the functions env file.",
+          ),
+        );
+      }
       const serveMainTemplate = yield* Effect.promise(() => getLegacyFunctionsServeMainTemplate());
       // Streamed in via `docker cp` between create and start: embedding the template in the
       // `sh -c` argv hits Windows ENAMETOOLONG (#5711), and a single-file host bind mounts as
       // an empty directory on daemons that cannot see this host's filesystem (#6254, #4190).
       const serveMainArchive = yield* Effect.tryPromise({
-        try: () => containerArchiveBytes({ [serveMainContainerPath]: serveMainTemplate }),
+        try: () => containerArchiveBytes({ [serveMainFile]: serveMainTemplate }),
         catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
       });
       const containerProjectRoot = toDockerPath(input.projectRoot);
@@ -1804,11 +1816,14 @@ export const startEdgeRuntimeContainer = Effect.fn("functions.startEdgeRuntimeCo
         ...(input.inspectMode === undefined
           ? []
           : ["-p", `${input.config.edgeRuntimeInspectorPort}:${dockerRuntimeInspectorPort}`]),
-        "--entrypoint",
-        "sh",
+        ...(slimEdgeRuntime ? [] : ["--entrypoint", "sh"]),
         input.image,
-        "-c",
-        buildServeEntrypointCommand(runtimeCommand, dockerMultilineEnvScript?.scriptPath),
+        ...(slimEdgeRuntime
+          ? runtimeCommand.slice(1)
+          : [
+              "-c",
+              buildServeEntrypointCommand(runtimeCommand, dockerMultilineEnvScript?.scriptPath),
+            ]),
       ];
 
       // The container must exist for `docker cp` to have a target, and must not be running
