@@ -2,6 +2,7 @@ import { it } from "@effect/vitest";
 import { buildFactBase, type Fact, type StableId } from "@supabase/pg-delta/core";
 import { renderPlanFiles, ShadowLoadError } from "@supabase/pg-delta/frontends";
 import { plan, type Action } from "@supabase/pg-delta/plan";
+import { resolveView } from "@supabase/pg-delta/policy";
 import { Effect } from "effect";
 import { Pool } from "pg";
 import { describe, expect } from "vitest";
@@ -386,6 +387,49 @@ describe("LegacyPgDeltaNextAdapter", () => {
     ]) {
       expect(sql).not.toContain(leakedName);
     }
+  });
+
+  it("projects unselected schemas out of the managed view used by declarative generate", () => {
+    const schemaPublic = { kind: "schema", name: "public" } satisfies StableId;
+    const unselectedSchema = { kind: "schema", name: "dogfood_app" } satisfies StableId;
+    const selectedTable = {
+      kind: "table",
+      schema: "public",
+      name: "dogfood_note",
+    } satisfies StableId;
+    const unselectedTable = {
+      kind: "table",
+      schema: "dogfood_app",
+      name: "widget",
+    } satisfies StableId;
+    const clusterExtension = { kind: "extension", name: "uuid-ossp" } satisfies StableId;
+    const tablePayload = {
+      persistence: "p",
+      partitionBound: null,
+      partitionKey: null,
+      parentTable: null,
+    } as const;
+    const fact = (id: StableId, payload: Fact["payload"] = {}, parent?: StableId): Fact =>
+      parent === undefined ? { id, payload } : { id, parent, payload };
+
+    const view = resolveView(
+      buildFactBase(
+        [
+          fact(schemaPublic),
+          fact(unselectedSchema),
+          fact(selectedTable, tablePayload, schemaPublic),
+          fact(unselectedTable, tablePayload, unselectedSchema),
+          fact(clusterExtension, { schema: "extensions", version: "1.1", relocatable: true }),
+        ],
+        [],
+      ),
+      legacyPgDeltaNextProfile(["public"]).policy,
+    );
+    const encoded = view.facts().map((item) => JSON.stringify(item.id));
+    expect(encoded.some((id) => id.includes("dogfood_note"))).toBe(true);
+    expect(encoded.some((id) => id.includes("uuid-ossp"))).toBe(true);
+    expect(encoded.some((id) => id.includes("dogfood_app"))).toBe(false);
+    expect(encoded.some((id) => id.includes("widget"))).toBe(false);
   });
 
   it.effect(

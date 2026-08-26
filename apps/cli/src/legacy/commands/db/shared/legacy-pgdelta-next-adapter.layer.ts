@@ -306,6 +306,48 @@ function legacyNormalizePgDeltaNextRenderedFiles(
   }));
 }
 
+/**
+ * Scope rule that keeps only the caller-selected schemas.
+ *
+ * Must be a *fact-level* (no `verb`) exclude: pg-delta's managed-view projection
+ * skips verb rules (`factScopeExclusion`), so a verb-only filter would apply to
+ * `plan()` deltas but not to `buildSchemaExport` / reconstruct. Cluster objects
+ * with no schema identity (extensions, roles) stay visible so a `--schema public`
+ * export remains applyable.
+ */
+function legacyPgDeltaNextSelectedSchemaFilter(
+  selected: readonly string[],
+): NonNullable<Policy["filter"]> {
+  const names = [...selected];
+  return [
+    {
+      match: {
+        all: [
+          {
+            any: [
+              { schema: "*" },
+              { all: [{ kind: "schema" }, { name: "*" }] },
+              { target: { schema: "*" } },
+              { target: { kind: "schema", name: "*" } },
+            ],
+          },
+          {
+            not: {
+              any: [
+                { schema: names },
+                { all: [{ kind: "schema" }, { name: names }] },
+                { target: { schema: names } },
+                { target: { kind: "schema", name: names } },
+              ],
+            },
+          },
+        ],
+      },
+      action: "exclude",
+    },
+  ];
+}
+
 export function legacyPgDeltaNextProfile(
   schema: readonly string[] | undefined,
 ): IntegrationProfile {
@@ -316,6 +358,10 @@ export function legacyPgDeltaNextProfile(
   const policy: Policy = {
     id: `supabase-cli-schemas:${selected.join(",")}`,
     filter: [
+      ...legacyPgDeltaNextSelectedSchemaFilter(selected),
+      // Verb-only: plan/diff still hide schemaless cluster deltas (roles) that
+      // are not in the selected schemas. `resolveView` skips verb rules, so this
+      // cannot replace the fact-level exclude above.
       {
         match: {
           all: [

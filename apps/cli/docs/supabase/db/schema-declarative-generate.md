@@ -8,4 +8,6 @@ The bundled pg-delta engine writes one directory per schema at the root of that 
 
 Emitted SQL uses the same default format as `db pull` (uppercase keywords, indent 2, width 180, column-aligned). Override with `[experimental.pgdelta] format_options`, or set `format_options = "null"` for raw statements.
 
+`--schema` / `-s` limits the export to those schemas. Cluster objects with no schema identity still land under `_cluster/`. Platform schemas stay excluded by the Supabase profile.
+
 Requires `--experimental` flag or `[experimental.pgdelta] enabled = true` in config.
